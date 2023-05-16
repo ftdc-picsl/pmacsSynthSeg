@@ -120,6 +120,12 @@ for input_anatomical in anatomical_images:
     # This should be good enough to ensure we don't mismatch mask and data
     brain_mask = f"{anatomical_prefix}_space-{anatomical_suffix}_desc-brain_mask.nii.gz"
 
+    brain_mask_full_path = os.path.join(mask_dataset_dir, brain_mask)
+
+    if not os.path.isfile(brain_mask_full_path):
+        print(f"Brain mask not found: {brain_mask_full_path}")
+        continue
+
     # Output dir for this session
     output_dir = os.path.realpath(os.path.dirname(os.path.join(output_dataset_dir, anatomical_prefix)))
 
