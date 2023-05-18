@@ -63,23 +63,14 @@ output_dataset_dir = args.output_dataset
 
 job_id = os.environ['LSB_JOBID']
 
-working_dir = tempfile.TemporaryDirectory(suffix=f".synthseg.{job_id}", dir="/scratch", ignore_cleanup_errors=True)
-
-# allow user to control whether to pass these args to synthseg
-posteriors_arg = ""
-
-# Add this to singularity call (before synthseg)
-singl_gpu_arg = ""
-
-if args.gpu:
-    singl_gpu_arg = "--nv"
-
-if args.posteriors:
-    posteriors_arg = "--posteriors"
+# This is an object you can call cleanup() on manually
+working_dir_tmpdir = tempfile.TemporaryDirectory(suffix=f".synthseg.{job_id}", dir="/scratch", ignore_cleanup_errors=True)
+working_dir = working_dir_tmpdir.name
 
 singularity_env = os.environ.copy()
 singularity_env['SINGULARITYENV_OMP_NUM_THREADS'] = "1"
 singularity_env['SINGULARITYENV_ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = "1"
+singularity_env['SINGULARITYENV_PYTHONUNBUFFERED'] = "1"
 
 if shutil.which('singularity') is None:
     raise RuntimeError('singularity executable not found')
@@ -89,7 +80,7 @@ with open(args.anatomical_images, 'r') as file_in:
 
 anatomical_images = [ line.rstrip() for line in anatomical_images ]
 
-print(f"Processing {len(anatomical_images)} images")
+print(f"\nProcessing {len(anatomical_images)} images")
 
 # Check if output bids dir exists, and if not, create it
 if not os.path.isdir(output_dataset_dir):
@@ -103,10 +94,10 @@ for input_anatomical in anatomical_images:
     input_anatomical_full_path = os.path.join(input_dataset_dir, input_anatomical)
 
     if not os.path.isfile(input_anatomical_full_path):
-        print(f"Anatomical input file not found: {input_anatomical}")
+        print(f"Anatomical input file not found: {input_anatomical_full_path}")
         continue
 
-    print(f"Processing {input_anatomical}")
+    print(f"\nProcessing {input_anatomical}")
 
     match = re.match('(.*)_(\w+)\.nii\.gz$', input_anatomical)
 
@@ -137,12 +128,24 @@ for input_anatomical in anatomical_images:
     os.makedirs(output_dir)
 
     # Now call synthseg - output to working_dir, will be renamed
-    subprocess.run(['singularity', 'run', '--cleanenv', singl_gpu_arg, '-B',
-                    f"{os.path.realpath(input_dataset_dir)}:/input,{os.path.realpath(mask_dataset_dir)}:/masks," +
-                    f"{os.path.realpath(working_dir)}:/output",
-                    container, '--input', f"/input/{input_anatomical}", "--mask", f"/masks/{brain_mask}",
-                    "--output", f"/output/{anatomical_prefix}", "--qc", "--volumes", "--resample-orig",
-                    posteriors_arg], env = singularity_env)
+    synthseg_cmd_dict = ['singularity', 'run', '--cleanenv']
+
+    if args.gpu:
+        synthseg_cmd_dict.append('--nv')
+
+    synthseg_cmd_dict.extend(['-B',
+                f"{os.path.realpath(input_dataset_dir)}:/input,{os.path.realpath(mask_dataset_dir)}:/masks," +
+                f"{os.path.realpath(working_dir)}:/output",
+                container, '--input', f"/input/{input_anatomical}", "--mask", f"/masks/{brain_mask}",
+                "--output", f"/output/{anatomical_prefix}", "--qc", "--vol", "--resample-orig"])
+
+    # subprocess.run does not like empty args, instead append if needed
+    if args.posteriors:
+        synthseg_cmd_dict.append('--post')
+
+    print("---SynthSeg call---\n" + " ".join(synthseg_cmd_dict) + "\n---")
+
+    subprocess.run(synthseg_cmd_dict, env=singularity_env)
 
     # Rename output in BIDS derivatives format
     # Segmentation output prefix relative to output dataset
@@ -201,7 +204,7 @@ for input_anatomical in anatomical_images:
     dseg_label_names = [dseg_label_dict[key] for key in dseg_label_keys]
 
     # Write out dseg.tsv with column headers "index", "name"
-    with (f"{output_dataset_dir}/{seg_out_prefix}.tsv", "w") as dseg_tsv:
+    with open(f"{output_dataset_dir}/{seg_out_prefix}.tsv", "w") as dseg_tsv:
         dseg_tsv.write("index\tname\n")
         for index, name in dseg_label_dict.items():
             dseg_tsv.write(f"{index}\t{name}\n")
@@ -220,7 +223,7 @@ for input_anatomical in anatomical_images:
     shutil.copy(f"{output_dataset_dir}/{seg_out_prefix}.tsv", f"{output_dataset_dir}/{seg_out_orig_prefix}.tsv")
 
     # Map QC and volumes CSV to TSV for BIDS
-    csv_to_bids_tsv(f"{working_dir}/{anatomical_prefix}SynthSegQC.csv",
+    csv_to_bids_tsv(f"{working_dir}/{anatomical_prefix}QC.csv",
                     f"{output_dataset_dir}/{anatomical_prefix}_desc-qc.tsv")
     csv_to_bids_tsv(f"{working_dir}/{anatomical_prefix}Volumes.csv",
                     f"{output_dataset_dir}/{anatomical_prefix}_desc-volumes.tsv")
@@ -233,11 +236,11 @@ for input_anatomical in anatomical_images:
                 f"{output_dataset_dir}/{posterior_out_prefix}.nii.gz")
 
         # Convert label map to JSON representation
-        label_map = json.dumps({ "LabelMap" : dseg_label_names }, indent=4)
-        with open(f"{output_dataset_dir}/{posterior_out_prefix}.json", w) as post_json_file:
-            json.dump(label_map, post_json_file)
+        label_map = { "LabelMap" : dseg_label_names }
+        with open(f"{output_dataset_dir}/{posterior_out_prefix}.json", "w") as post_json_file:
+            json.dump(label_map, post_json_file, indent=4)
 
-        posterior_out_orig_prefix = f"{output_dataset_dir}/{anatomical_prefix}_space-orig_probseg"
+        posterior_out_orig_prefix = f"{anatomical_prefix}_space-orig_probseg"
 
         shutil.copy(f"{working_dir}/{anatomical_prefix}PosteriorsOrig.nii.gz",
                 f"{output_dataset_dir}/{posterior_out_orig_prefix}.nii.gz")
