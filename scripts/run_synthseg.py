@@ -128,12 +128,12 @@ for input_anatomical in anatomical_images:
     os.makedirs(output_dir)
 
     # Now call synthseg - output to working_dir, will be renamed
-    synthseg_cmd_dict = ['singularity', 'run', '--cleanenv']
+    synthseg_cmd_list = ['singularity', 'run', '--cleanenv']
 
     if args.gpu:
-        synthseg_cmd_dict.append('--nv')
+        synthseg_cmd_list.append('--nv')
 
-    synthseg_cmd_dict.extend(['-B',
+    synthseg_cmd_list.extend(['-B',
                 f"{os.path.realpath(input_dataset_dir)}:/input,{os.path.realpath(mask_dataset_dir)}:/masks," +
                 f"{os.path.realpath(working_dir)}:/output",
                 container, '--input', f"/input/{input_anatomical}", "--mask", f"/masks/{brain_mask}",
@@ -141,11 +141,11 @@ for input_anatomical in anatomical_images:
 
     # subprocess.run does not like empty args, instead append if needed
     if args.posteriors:
-        synthseg_cmd_dict.append('--post')
+        synthseg_cmd_list.append('--post')
 
-    print("---SynthSeg call---\n" + " ".join(synthseg_cmd_dict) + "\n---")
+    print("---SynthSeg call---\n" + " ".join(synthseg_cmd_list) + "\n---")
 
-    subprocess.run(synthseg_cmd_dict, env=singularity_env)
+    subprocess.run(synthseg_cmd_list, env=singularity_env)
 
     # Rename output in BIDS derivatives format
     # Segmentation output prefix relative to output dataset
