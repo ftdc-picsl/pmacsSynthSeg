@@ -48,7 +48,9 @@ required.add_argument("--container", help="Path to the container to run", type=s
 required.add_argument("--input-dataset", help="Input BIDS dataset dir, containing the source images", type=str, required=True)
 required.add_argument("--mask-dataset", help="Mask BIDS dataset dir, containing the brain mask images", type=str, required=True)
 required.add_argument("--output-dataset", help="Output BIDS dataset dir", type=str, required=True)
-required.add_argument("--anatomical-images", help="List of anatomical images relative to the input data set", type=str, required=True)
+required.add_argument("--anatomical-images", help="List of anatomical images relative to the input data set. Multiple images from the same session must be distinguished "
+                      "before the suffix. For example, 'acq-mprage_T1w.nii.gz' and 'acq-vnav_T1w.nii.gz' will be processed, but 'acq-vnav_T1w.nii.gz' and 'acq-vnav_T2w.nii.gz' "
+                      "from within the same session will not work.", type=str, required=True)
 optional = parser.add_argument_group('Optional arguments')
 optional.add_argument("-h", "--help", action="help", help="show this help message and exit")
 optional.add_argument("--gpu", help="Use GPU", action="store_true")
