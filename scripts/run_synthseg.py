@@ -123,7 +123,7 @@ for input_anatomical in anatomical_images:
     output_dir = os.path.realpath(os.path.dirname(os.path.join(output_dataset_dir, anatomical_prefix)))
 
     # Make output dir if needed
-    os.makedirs(output_dir, exists_ok = True)
+    os.makedirs(output_dir, exist_ok = True)
 
     # Segmentation output prefix relative to output dataset dir, in synthseg space (cropped, 1mm)
     seg_out_prefix = f"{anatomical_prefix}_space-SynthSeg_dseg"
