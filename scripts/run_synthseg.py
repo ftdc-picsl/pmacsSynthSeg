@@ -48,7 +48,9 @@ required.add_argument("--container", help="Path to the container to run", type=s
 required.add_argument("--input-dataset", help="Input BIDS dataset dir, containing the source images", type=str, required=True)
 required.add_argument("--mask-dataset", help="Mask BIDS dataset dir, containing the brain mask images", type=str, required=True)
 required.add_argument("--output-dataset", help="Output BIDS dataset dir", type=str, required=True)
-required.add_argument("--anatomical-images", help="List of anatomical images relative to the input data set", type=str, required=True)
+required.add_argument("--anatomical-images", help="List of anatomical images relative to the input data set. Multiple images from the same session must be distinguished "
+                      "before the suffix. For example, 'acq-mprage_T1w.nii.gz' and 'acq-vnav_T1w.nii.gz' will be processed, but 'acq-vnav_T1w.nii.gz' and 'acq-vnav_T2w.nii.gz' "
+                      "from within the same session will not work.", type=str, required=True)
 optional = parser.add_argument_group('Optional arguments')
 optional.add_argument("-h", "--help", action="help", help="show this help message and exit")
 optional.add_argument("--gpu", help="Use GPU", action="store_true")
@@ -120,12 +122,17 @@ for input_anatomical in anatomical_images:
     # Output dir for this session
     output_dir = os.path.realpath(os.path.dirname(os.path.join(output_dataset_dir, anatomical_prefix)))
 
-    # Check for existing output
-    if os.path.exists(output_dir):
-        print(f"Output already exists: {output_dir}")
-        continue
+    # Make output dir if needed
+    os.makedirs(output_dir, exist_ok = True)
 
-    os.makedirs(output_dir)
+    # Segmentation output prefix relative to output dataset dir, in synthseg space (cropped, 1mm)
+    seg_out_prefix = f"{anatomical_prefix}_space-SynthSeg_dseg"
+
+    # Check for existing output for this particular T1w
+    seg_out_full_path = os.path.join(output_dataset_dir, f"{seg_out_prefix}.nii.gz")
+    if os.path.exists(seg_out_full_path):
+        print(f"Output already exists: {seg_out_full_path}")
+        continue
 
     # Now call synthseg - output to working_dir, will be renamed
     synthseg_cmd_list = ['singularity', 'run', '--cleanenv']
@@ -148,11 +155,7 @@ for input_anatomical in anatomical_images:
     subprocess.run(synthseg_cmd_list, env=singularity_env)
 
     # Rename output in BIDS derivatives format
-    # Segmentation output prefix relative to output dataset
-    seg_out_prefix = f"{anatomical_prefix}_space-SynthSeg_dseg"
-
-    shutil.copy(f"{working_dir}/{anatomical_prefix}SynthSeg.nii.gz",
-                f"{output_dataset_dir}/{seg_out_prefix}.nii.gz")
+    shutil.copy(f"{working_dir}/{anatomical_prefix}SynthSeg.nii.gz", seg_out_full_path)
 
     # if run without cortical parcellation, the labels are specified in
     # https://github.com/BBillot/SynthSeg/blob/master/data/labels%20table.txt
