@@ -131,7 +131,7 @@ fi
 export PYTHONUNBUFFERED=1
 
 bsub -cwd . $gpuBsubOpt -o "${outputBIDS}/logs/synthseg_${date}_%J.txt" \
-    conda run -p /project/ftdc_pipeline/ftdc-picsl/miniconda/envs/ftdc-picsl-cp11 ${repoDir}/scripts/run_synthseg.py \
+    conda run -p /project/ftdc_pipeline/ftdc-picsl/miniconda/envs/ftdc-picsl-cp311 ${repoDir}/scripts/run_synthseg.py \
       --container ${repoDir}/containers/synthseg-mask-0.3.0.sif $gpuScriptOpt $posteriorsArg\
       --input-dataset $inputBIDS \
       --mask-dataset $maskBIDS \
