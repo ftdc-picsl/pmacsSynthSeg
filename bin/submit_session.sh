@@ -10,11 +10,11 @@ repoDir=${scriptDir%/bin}
 
 inputBIDS="/project/ftdc_volumetric/fw_bids"
 maskBIDS="/project/ftdc_pipeline/data/synthstripT1w"
-outputBIDS="/project/ftdc_pipeline/data/synthsegT1w"
+outputBIDS=""
 
 function usage() {
   echo "Usage:
-  $0 [-h] [-a 0/1] [-g 1/0] [-p 0/1] -i image_list.txt
+  $0 [-h] [-a 0/1] [-g 1/0] [-p 0/1] [-i input_dataset] [-m mask_dataset] -o output_dataset subject session
   "
 }
 
@@ -27,26 +27,17 @@ function help() {
 cat << HELP
   `usage`
 
-  This is a wrapper script to submit images for processing. It assumes input from the BIDS dataset
+  This is a wrapper script to submit a single session for processing.
 
-  /project/ftdc_volumetric/fw_bids
-
-  The image_list should be one per line, and relative to the BIDS dataset, eg
-
-  sub-123456/ses-19970829x0214/anat/sub-123456_ses-19970829x0214_T1w.nii.gz
-
-  Brain masks should exist in
-
-    /project/ftdc_pipeline/synthstripT1w/
-
-  The brain mask is only used to center the cropped FOV of synthseg. The input image is then cropped
+  A brain mask is required, it is used to center the cropped FOV of synthseg. The input image is then cropped
   around the mask and resampled to 1mm isotropic resolution. This is the "SynthSeg space", which should
   be anatomically aligned with the native space, but with a different bounding box and spacing.
 
   Required args:
 
-    -i image_list.txt
-        List of images to process, relative to the BIDS dataset, one per line. file must be text (.txt).
+    -o output dataset
+        Output BIDS dataset.
+
 
   Optional args:
 
@@ -54,6 +45,10 @@ cat << HELP
         Output in antsct format (default = 0).
     -g 1/0
         Use the GPU (default = 1).
+    -i input dataset
+        Input BIDS dataset (default = $inputBIDS).
+    -m mask dataset
+        BIDS dataset containing brain masks (default = $maskBIDS).
     -p 0/1
         Output posteriors (default = 0).
 
@@ -94,22 +89,23 @@ cat << HELP
   If '-a 1' is specified, the following files will also be output:
 
     space-orig_seg-antsct_dseg.nii.gz               - Segmentation in antsct format
-    space-orig_seg-antsct_label-X_probseg.nii.gz    - Posteriors for class X (if -p 1 specified)
+    space-orig_seg-antsct_label-X_probseg.nii.gz    - Posteriors for class X (if -p 1 specified), using BIDS common label names
 
 HELP
 
 }
 
-imageList=""
 useGPU=1
 outputPosteriors=0
 outputAnts=0
 
-while getopts "a:g:i:p:h" opt; do
+while getopts "a:g:i:m:o:p:h" opt; do
   case $opt in
     a) outputAnts=$OPTARG;;
     g) useGPU=$OPTARG;;
-    i) imageList=$OPTARG;;
+    i) inputBIDS=$OPTARG;;
+    m) maskBIDS=$OPTARG;;
+    o) outputBIDS=$OPTARG;;
     p) outputPosteriors=$OPTARG;;
     h) help; exit 1;;
     \?) echo "Unknown option $OPTARG"; exit 2;;
@@ -118,6 +114,18 @@ while getopts "a:g:i:p:h" opt; do
 done
 
 shift $((OPTIND-1))
+
+if [[ $# -lt 2 ]]; then
+  echo "Error: subject and session are required as positional arguments"
+  exit 1
+fi
+
+subject=$1
+session=$2
+
+# find T1w images in the input dataset, relative to the dataset directory
+imageList=($(find "${inputBIDS}/sub-${subject}/ses-${session}" -type f -name "*_T1w.nii.gz" \
+                -printf "sub-${subject}/ses-${session}/%P "))
 
 date=`date +%Y%m%d`
 
@@ -145,10 +153,14 @@ fi
 # and errors in order
 export PYTHONUNBUFFERED=1
 
-bsub -cwd . $gpuBsubOpt -o "${outputBIDS}/logs/synthseg_${date}_%J.txt" \
+if [[ ! -d "${outputBIDS}/code/logs" ]]; then
+  mkdir -p "${outputBIDS}/code/logs"
+fi
+
+bsub -cwd . $gpuBsubOpt -o "${outputBIDS}/code/logs/synthseg_${date}_%J.txt" \
     conda run -p /project/ftdc_pipeline/ftdc-picsl/miniconda/envs/ftdc-picsl-cp311 ${repoDir}/scripts/run_synthseg.py \
       --container ${repoDir}/containers/synthseg-mask-0.4.0.sif $gpuScriptOpt $posteriorsArg $antsArg \
       --input-dataset $inputBIDS \
       --mask-dataset $maskBIDS \
       --output-dataset $outputBIDS \
-      --anatomical-images $imageList
+      --anatomical-images ${imageList[@]} \

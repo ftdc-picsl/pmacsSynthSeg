@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import glob
 import json
 import os
 import re
@@ -48,13 +49,16 @@ required.add_argument("--container", help="Path to the container to run", type=s
 required.add_argument("--input-dataset", help="Input BIDS dataset dir, containing the source images", type=str, required=True)
 required.add_argument("--mask-dataset", help="Mask BIDS dataset dir, containing the brain mask images", type=str, required=True)
 required.add_argument("--output-dataset", help="Output BIDS dataset dir", type=str, required=True)
-required.add_argument("--anatomical-images", help="List of anatomical images relative to the input data set. Multiple images from the same session must be distinguished "
-                      "before the suffix. For example, 'acq-mprage_T1w.nii.gz' and 'acq-vnav_T1w.nii.gz' will be processed, but 'acq-vnav_T1w.nii.gz' and 'acq-vnav_T2w.nii.gz' "
-                      "from within the same session will not work.", type=str, required=True)
+required.add_argument("--anatomical-images", help="List of anatomical images relative to the input data set. Either a list of "
+                      "strings or a single text file. Multiple images from the same session must be distinguished before the "
+                      "suffix. For example, 'acq-mprage_T1w.nii.gz' and 'acq-vnav_T1w.nii.gz' will be processed, but "
+                      "'acq-vnav_T1w.nii.gz' and 'acq-vnav_T2w.nii.gz' from within the same session will not work.",
+                      type=str, nargs='+', required=True)
 optional = parser.add_argument_group('Optional arguments')
 optional.add_argument("-h", "--help", action="help", help="show this help message and exit")
 optional.add_argument("--gpu", help="Use GPU", action="store_true")
 optional.add_argument("--posteriors", help="Output posteriors", action="store_true")
+optional.add_argument("--antsct", help="Output antsct seg and posteriors", action="store_true")
 args = parser.parse_args()
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -77,10 +81,12 @@ singularity_env['SINGULARITYENV_PYTHONUNBUFFERED'] = "1"
 if shutil.which('singularity') is None:
     raise RuntimeError('singularity executable not found')
 
-with open(args.anatomical_images, 'r') as file_in:
-    anatomical_images = file_in.readlines()
+anatomical_images = args.anatomical_images
 
-anatomical_images = [ line.rstrip() for line in anatomical_images ]
+if len(anatomical_images) == 1 and anatomical_images[0].endswith('.txt'):
+    with open(args.anatomical_images[0], 'r') as file_in:
+        anatomical_images = file_in.readlines()
+    anatomical_images = [ line.rstrip() for line in anatomical_images ]
 
 print(f"\nProcessing {len(anatomical_images)} images")
 
@@ -109,15 +115,25 @@ for input_anatomical in anatomical_images:
     # suffix eg T1w, T2w
     anatomical_suffix = match.group(2)
 
-    # Mask path relative to mask data set
-    # This should be good enough to ensure we don't mismatch mask and data
-    brain_mask = f"{anatomical_prefix}_space-{anatomical_suffix}_desc-brain_mask.nii.gz"
+    # find brain masks matching the anatomical prefix
+    brain_mask_full_path_prefix = os.path.join(mask_dataset_dir, anatomical_prefix)
 
-    brain_mask_full_path = os.path.join(mask_dataset_dir, brain_mask)
+    # This is a backwards compatibilty hack because the brain masking routines behave differently
+    # some scripts used -space-{modality}, eg space-T1w, and other don't use space- at all. This isn't good
+    # because space- is supposed to denote a transformed version of a single image, not multiple images derived
+    # independently.
+    #
+    brain_mask_files = glob.glob(f"{brain_mask_full_path_prefix}*_desc-brain_mask.nii.gz")
 
-    if not os.path.isfile(brain_mask_full_path):
-        print(f"Brain mask not found: {brain_mask_full_path}")
+    if len(brain_mask_files) == 0:
+        print(f"ERROR: Brain mask not found under: {brain_mask_full_path_prefix}")
         continue
+    if len(brain_mask_files) > 1:
+        print(f"ERROR: Multiple brain masks found for {input_anatomical}: {brain_mask_files}")
+        continue
+
+    # Brain mask relative to mask dataset
+    brain_mask = os.path.relpath(brain_mask_files[0], mask_dataset_dir)
 
     # Output dir for this session
     output_dir = os.path.realpath(os.path.dirname(os.path.join(output_dataset_dir, anatomical_prefix)))
@@ -150,6 +166,9 @@ for input_anatomical in anatomical_images:
     if args.posteriors:
         synthseg_cmd_list.append('--post')
 
+    if args.antsct:
+        synthseg_cmd_list.append('--antsct')
+
     print("---SynthSeg call---\n" + " ".join(synthseg_cmd_list) + "\n---")
 
     subprocess.run(synthseg_cmd_list, env=singularity_env)
@@ -176,6 +195,7 @@ for input_anatomical in anatomical_images:
     # 16        brain-stem
     # 17        left hippocampus
     # 18        left amygdala
+    # 24        CSF
     # 26        left accumbens area
     # 28        left ventral DC
     # 41        right cerebral white matter
@@ -192,11 +212,12 @@ for input_anatomical in anatomical_images:
     # 54        right amygdala
     # 58        right accumbens area
     # 60        right ventral DC
-    dseg_label_dict = {0:"background", 2:"left_cerebral_white_matter", 3:"left_cerebral_cortex", 4:"left_lateral_ventricle",
-                       5:"left_inferior_lateral_ventricle", 7:"left_cerebellum_white_matter", 8:"left_cerebellum_cortex",
-                       10:"left_thalamus", 11:"left_caudate", 12:"left_putamen", 13:"left_pallidum", 14:"3rd_ventricle",
-                       15:"4th_ventricle", 16:"brain-stem", 17:"left_hippocampus", 18:"left_amygdala", 26:"left_accumbens_area",
-                       28:"left_ventral_DC", 41:"right_cerebral_white_matter", 42:"right_cerebral_cortex", 43:"right_lateral_ventricle",
+    dseg_label_dict = {0:"background", 2:"left_cerebral_white_matter", 3:"left_cerebral_cortex",
+                       4:"left_lateral_ventricle", 5:"left_inferior_lateral_ventricle", 7:"left_cerebellum_white_matter",
+                       8:"left_cerebellum_cortex", 10:"left_thalamus", 11:"left_caudate", 12:"left_putamen",
+                       13:"left_pallidum", 14:"3rd_ventricle", 15:"4th_ventricle", 16:"brain-stem", 17:"left_hippocampus",
+                       18:"left_amygdala", 24:"CSF", 26:"left_accumbens_area", 28:"left_ventral_DC",
+                       41:"right_cerebral_white_matter", 42:"right_cerebral_cortex", 43:"right_lateral_ventricle",
                        44:"right_inferior_lateral_ventricle", 46:"right_cerebellum_white_matter", 47:"right_cerebellum_cortex",
                        49:"right_thalamus", 50:"right_caudate", 51:"right_putamen", 52:"right_pallidum", 53:"right_hippocampus",
                        54:"right_amygdala", 58:"right_accumbens_area", 60:"right_ventral_DC"}
@@ -250,3 +271,26 @@ for input_anatomical in anatomical_images:
 
         shutil.copy(f"{output_dataset_dir}/{posterior_out_prefix}.json", f"{output_dataset_dir}/{posterior_out_orig_prefix}.json")
 
+
+    if (args.antsct):
+        ants_seg_out_prefix = f"{anatomical_prefix}_space-orig_seg-antsct_dseg"
+
+        shutil.copy(f"{working_dir}/{anatomical_prefix}SynthSegToAntsCT.nii.gz",
+                f"{output_dataset_dir}/{ants_seg_out_prefix}.nii.gz")
+
+        with open(f"{output_dataset_dir}/{ants_seg_out_prefix}.tsv", "w") as ants_dseg_tsv:
+            ants_dseg_tsv.write("index\tname\n")
+            ants_dseg_tsv.write(f"0\tBackground\n")
+            ants_dseg_tsv.write(f"1\tCSF\n")
+            ants_dseg_tsv.write(f"2\tGray Matter\n")
+            ants_dseg_tsv.write(f"3\tWhite Matter\n")
+            ants_dseg_tsv.write(f"4\tSubcortical Gray Matter\n")
+            ants_dseg_tsv.write(f"5\tBrainstem\n")
+            ants_dseg_tsv.write(f"6\tCerebellum\n")
+
+        if args.posteriors:
+            ants_post_out_prefix = f"{anatomical_prefix}_space-orig_seg-antsct"
+            bids_posterior_labels = ['CSF', 'CGM', 'WM', 'SGM', 'BS', 'CBM']
+            for idx in range(6):
+                shutil.copy(f"{working_dir}/{anatomical_prefix}AntsctPosteriors{idx+1}.nii.gz",
+                            f"{output_dataset_dir}/{ants_post_out_prefix}_label-{bids_posterior_labels[idx]}_probseg.nii.gz")
