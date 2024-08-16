@@ -1,6 +1,6 @@
 #!/bin/bash
 
-module load miniconda/3-22.11
+module load miniconda/3-22.11 > /dev/null
 module load singularity/3.8.3
 
 scriptPath=$(readlink -f "$0")
@@ -8,13 +8,13 @@ scriptDir=$(dirname "${scriptPath}")
 # Repo base dir under which we find bin/ and containers/
 repoDir=${scriptDir%/bin}
 
-inputBIDS="/project/ftdc_volumetric/fw_bids"
-maskBIDS="/project/ftdc_pipeline/data/synthstripT1w"
-outputBIDS="/project/ftdc_pipeline/data/synthsegT1w"
+inputBIDS=""
+maskBIDS=""
+outputBIDS=""
 
 function usage() {
   echo "Usage:
-  $0 [-h] [-a 0/1] [-g 1/0] [-p 0/1] -i image_list.txt
+  $0 [-h] [-a 0/1] [-g 1/0] [-p 0/1] -i input_dataset -m mask_dataset -o output_dataset image_list.txt
   "
 }
 
@@ -27,17 +27,25 @@ function help() {
 cat << HELP
   `usage`
 
-  This is a wrapper script to submit images for processing. It assumes input from the BIDS dataset
+  This is a wrapper script to submit images for processing. It assumes input from a BIDS dataset, which by default is
 
-  /project/ftdc_volumetric/fw_bids
+    $inputBIDS
 
-  The image_list should be one per line, and relative to the BIDS dataset, eg
+  The image_list should be one per line, relative to the BIDS dataset, eg
 
   sub-123456/ses-19970829x0214/anat/sub-123456_ses-19970829x0214_T1w.nii.gz
 
-  Brain masks should exist in
+  Brain masks should exist in a BIDS derivative dataset, which by default is
 
-    /project/ftdc_pipeline/synthstripT1w/
+    $maskBIDS
+
+  Mask files should be named as derivatives of the T1w.nii.gz files, eg if the T1w input image is
+
+    sub-123456_ses-20160429x0000_acq-mprage_T1w.nii.gz
+
+  then the brain mask should be
+
+    sub-123456_ses-20160429x0000_acq-mprage_desc-brain_mask.nii.gz
 
   The brain mask is only used to center the cropped FOV of synthseg. The input image is then cropped
   around the mask and resampled to 1mm isotropic resolution. This is the "SynthSeg space", which should
@@ -45,8 +53,12 @@ cat << HELP
 
   Required args:
 
-    -i image_list.txt
-        List of images to process, relative to the BIDS dataset, one per line. file must be text (.txt).
+    -i input dataset
+        Input BIDS dataset (default = $inputBIDS).
+    -m mask dataset
+        BIDS dataset containing brain masks (default = $maskBIDS).
+    -o output dataset
+        Output BIDS dataset.
 
   Optional args:
 
@@ -57,6 +69,11 @@ cat << HELP
     -p 0/1
         Output posteriors (default = 0).
 
+  Positional args:
+
+    image1 image2 ... or image_list.txt
+
+    List of images to process. If a file is provided, it should contain one image per line, and have the extension .txt.
 
   Output:
 
@@ -105,11 +122,13 @@ useGPU=1
 outputPosteriors=0
 outputAnts=0
 
-while getopts "a:g:i:p:h" opt; do
+while getopts "a:g:i:m:o:p:h" opt; do
   case $opt in
     a) outputAnts=$OPTARG;;
     g) useGPU=$OPTARG;;
-    i) imageList=$OPTARG;;
+    i) inputBIDS=$OPTARG;;
+    m) maskBIDS=$OPTARG;;
+    o) outputBIDS=$OPTARG;;
     p) outputPosteriors=$OPTARG;;
     h) help; exit 1;;
     \?) echo "Unknown option $OPTARG"; exit 2;;
@@ -125,7 +144,7 @@ gpuBsubOpt=""
 gpuScrptOpt=""
 
 if [[ $useGPU -gt 0 ]]; then
-  gpuBsubOpt='-gpu "num=1:mode=shared:mps=no:j_exclusive=no"'
+  gpuBsubOpt='-gpu "num=1:mode=exclusive_process:mps=no:j_exclusive=yes"'
   gpuScriptOpt="--gpu"
 fi
 
@@ -141,14 +160,12 @@ if [[ $outputAnts -gt 0 ]]; then
   antsArg="--antsct"
 fi
 
-# Makes python output unbuffered, so we can tail the log file and see progress
-# and errors in order
-export PYTHONUNBUFFERED=1
+mkdir -p ${outputBIDS}/code/logs
 
-bsub -cwd . $gpuBsubOpt -o "${outputBIDS}/logs/synthseg_${date}_%J.txt" \
+bsub -cwd . $gpuBsubOpt -o "${outputBIDS}/code/logs/synthseg_${date}_%J.txt" \
     conda run -p /project/ftdc_pipeline/ftdc-picsl/miniconda/envs/ftdc-picsl-cp311 ${repoDir}/scripts/run_synthseg.py \
-      --container ${repoDir}/containers/synthseg-mask-0.4.0.sif $gpuScriptOpt $posteriorsArg $antsArg \
+      --container ${repoDir}/containers/synthseg-mask-0.4.1.sif $gpuScriptOpt $posteriorsArg $antsArg \
       --input-dataset $inputBIDS \
       --mask-dataset $maskBIDS \
       --output-dataset $outputBIDS \
-      --anatomical-images $imageList
+      --anatomical-images "$@"
