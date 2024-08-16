@@ -1,20 +1,20 @@
 #!/bin/bash
 
-module load miniconda/3-22.11
-module load singularity/3.8.3
-
 scriptPath=$(readlink -f "$0")
 scriptDir=$(dirname "${scriptPath}")
 # Repo base dir under which we find bin/ and containers/
 repoDir=${scriptDir%/bin}
 
-inputBIDS="/project/ftdc_volumetric/fw_bids"
-maskBIDS="/project/ftdc_pipeline/data/synthstripT1w"
+inputBIDS=""
+maskBIDS=""
 outputBIDS=""
+outputAnts=0
+outputPosteriors=0
+useGPU=1
 
 function usage() {
   echo "Usage:
-  $0 [-h] [-a 0/1] [-g 1/0] [-p 0/1] [-i input_dataset] [-m mask_dataset] -o output_dataset subject session
+  $0 [-h] [-a 0/1] [-g 1/0] [-p 0/1] -i input_dataset -m mask_dataset -o output_dataset subject session
   "
 }
 
@@ -30,14 +30,17 @@ cat << HELP
   This is a wrapper script to submit a single session for processing.
 
   A brain mask is required, it is used to center the cropped FOV of synthseg. The input image is then cropped
-  around the mask and resampled to 1mm isotropic resolution. This is the "SynthSeg space", which should
+  around the mask and resampled to 1mm isotropic resolution. This is "space-synthseg", which should
   be anatomically aligned with the native space, but with a different bounding box and spacing.
 
   Required args:
 
+    -i input dataset
+        Input BIDS dataset (default = $inputBIDS).
+    -m mask dataset
+        BIDS dataset containing brain masks (default = $maskBIDS).
     -o output dataset
         Output BIDS dataset.
-
 
   Optional args:
 
@@ -45,13 +48,15 @@ cat << HELP
         Output in antsct format (default = 0).
     -g 1/0
         Use the GPU (default = 1).
-    -i input dataset
-        Input BIDS dataset (default = $inputBIDS).
-    -m mask dataset
-        BIDS dataset containing brain masks (default = $maskBIDS).
     -p 0/1
         Output posteriors (default = 0).
 
+  Positional args:
+
+    subject
+        Subject ID, eg 123456. Do not include the sub- prefix.
+    session
+        Session ID, eg 20160429x0000. Do not include the ses- prefix.
 
   Output:
 
@@ -123,44 +128,20 @@ fi
 subject=$1
 session=$2
 
-# find T1w images in the input dataset, relative to the dataset directory
+# find T1w images for the subject and session
 imageList=($(find "${inputBIDS}/sub-${subject}/ses-${session}" -type f -name "*_T1w.nii.gz" \
                 -printf "sub-${subject}/ses-${session}/%P "))
 
-date=`date +%Y%m%d`
-
-gpuBsubOpt=""
-gpuScrptOpt=""
-
-if [[ $useGPU -gt 0 ]]; then
-  gpuBsubOpt='-gpu "num=1:mode=shared:mps=no:j_exclusive=no"'
-  gpuScriptOpt="--gpu"
+if [[ ${#imageList[@]} -eq 0 ]]; then
+    echo "No T1w images found for sub-${subject} ses-${session}"
+    exit 1
 fi
 
-posteriorsArg=""
-
-if [[ $outputPosteriors -gt 0 ]]; then
-  posteriorsArg="--posteriors"
-fi
-
-antsArg=""
-
-if [[ $outputAnts -gt 0 ]]; then
-  antsArg="--antsct"
-fi
-
-# Makes python output unbuffered, so we can tail the log file and see progress
-# and errors in order
-export PYTHONUNBUFFERED=1
-
-if [[ ! -d "${outputBIDS}/code/logs" ]]; then
-  mkdir -p "${outputBIDS}/code/logs"
-fi
-
-bsub -cwd . $gpuBsubOpt -o "${outputBIDS}/code/logs/synthseg_${date}_%J.txt" \
-    conda run -p /project/ftdc_pipeline/ftdc-picsl/miniconda/envs/ftdc-picsl-cp311 ${repoDir}/scripts/run_synthseg.py \
-      --container ${repoDir}/containers/synthseg-mask-0.4.0.sif $gpuScriptOpt $posteriorsArg $antsArg \
-      --input-dataset $inputBIDS \
-      --mask-dataset $maskBIDS \
-      --output-dataset $outputBIDS \
-      --anatomical-images ${imageList[@]} \
+${scriptDir}/submit_synthseg_batch.sh \
+  -a ${outputAnts} \
+  -g ${useGPU} \
+  -i ${inputBIDS} \
+  -m ${maskBIDS} \
+  -o ${outputBIDS} \
+  -p ${outputPosteriors} \
+  ${imageList[@]}
