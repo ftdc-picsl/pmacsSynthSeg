@@ -144,7 +144,7 @@ gpuBsubOpt=""
 gpuScrptOpt=""
 
 if [[ $useGPU -gt 0 ]]; then
-  gpuBsubOpt='-gpu "num=1:mode=exclusive_process:mps=no:j_exclusive=yes"'
+  gpuBsubOpt='"-gpu "num=1:mode=exclusive_process:mps=no:gtile=1"'
   gpuScriptOpt="--gpu"
 fi
 
@@ -164,7 +164,7 @@ mkdir -p ${outputBIDS}/code/logs
 
 bsub -cwd . $gpuBsubOpt -o "${outputBIDS}/code/logs/synthseg_${date}_%J.txt" \
     conda run -p /project/ftdc_pipeline/ftdc-picsl/miniconda/envs/ftdc-picsl-cp311 ${repoDir}/scripts/run_synthseg.py \
-      --container ${repoDir}/containers/synthseg-mask-0.4.1.sif $gpuScriptOpt $posteriorsArg $antsArg \
+      --container ${repoDir}/containers/synthseg-mask-0.4.0.sif $gpuScriptOpt $posteriorsArg $antsArg \
       --input-dataset $inputBIDS \
       --mask-dataset $maskBIDS \
       --output-dataset $outputBIDS \

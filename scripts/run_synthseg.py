@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import argparse
+import filelock
 import glob
 import json
 import os
@@ -8,6 +9,133 @@ import re
 import shutil
 import subprocess
 import tempfile
+
+
+def get_dataset_name(dataset_path):
+    """Get a dataset name from the BIDS dataset_description.json
+
+    Parameters:
+    -----------
+    dataset_path : str
+        Path to the dataset directory.
+
+    Returns:
+    --------
+    str :
+        The dataset name.
+    """
+    description_file = os.path.join(dataset_path, 'dataset_description.json')
+    if not os.path.exists(description_file):
+        raise FileNotFoundError(f"dataset_description.json not found in dataset path {dataset_path}")
+
+    with open(description_file, 'r') as f:
+        ds_description = json.load(f)
+
+    if 'Name' not in ds_description:
+        raise ValueError("Dataset name ('Name') not found in dataset_description.json")
+
+    return ds_description['Name']
+
+
+def get_container_info(container):
+
+    container_info = subprocess.run(['singularity', 'inspect', container], stdout=subprocess.PIPE)
+
+    # Parse the container info to get the tag
+    container_info = container_info.stdout.decode('utf-8')
+
+    container_tag = None
+    container_version = None
+
+    for line in container_info.split('\n'):
+        if 'org.label-schema.usage.singularity.deffile.from' in line:
+            # example line: org.label-schema.usage.singularity.deffile.from: cookpa/synthseg-mask:0.4.1
+            container_version = line.split(':')[-1].strip()
+            container_tag = line.split(':')[-2].strip() + ':' + container_version
+            break
+
+    if container_tag is None:
+        raise ValueError(f"Container tag not found in {container}")
+
+    return {'tag': container_tag, 'version': container_version}
+
+
+# Get a dictionary for the GeneratedBy field for the BIDS dataset_description.json
+# This is used to record the software used to generate the dataset
+# The environment variables DOCKER_IMAGE_TAG and DOCKER_IMAGE_VERSION are used if set
+#
+# Container type is assumed to be "docker" unless the variable SINGULARITY_CONTAINER
+# is defined
+def get_generated_by(container_info, existing_generated_by=None):
+
+    import copy
+
+    generated_by = []
+
+    container_type = 'singularity'
+
+    if existing_generated_by is not None:
+        generated_by = copy.deepcopy(existing_generated_by)
+        for gb in existing_generated_by:
+            if gb['Name'] == 'SynthSeg' and gb['Container']['Tag'] == container_info['tag']:
+                # Don't overwrite existing generated_by if it's already set to this pipeline
+                return generated_by
+
+    container_type = 'singularity'
+
+    if 'SINGULARITY_CONTAINER' in os.environ:
+        container_type = 'singularity'
+
+    gen_dict = {'Name': 'SynthSeg',
+                'Version': container_info['version'],
+                'CodeURL': os.environ.get('GIT_REMOTE', 'unknown'),
+                'Container': {'Type': container_type, 'Tag': container_info['tag']}
+                }
+
+    generated_by.append(gen_dict)
+    return generated_by
+
+
+def update_output_dataset(output_dataset_dir, input_dataset_dir, container_info):
+
+    input_dataset_name = get_dataset_name(input_dataset_dir)
+
+    lock_file = os.path.join(output_dataset_dir, 'synthseg_dataset_metadata.lock')
+
+    if os.path.exists(lock_file):
+        print(f"WARNING: lock file exists in dataset {output_dataset_dir}. Will wait for it to be released.")
+
+    with filelock.SoftFileLock(lock_file, timeout=30):
+        if not os.path.exists(os.path.join(output_dataset_dir, 'dataset_description.json')):
+            # Write dataset_description.json
+            output_dataset_name = input_dataset_name + '_synthseg'
+
+            output_ds_description = {'Name': output_dataset_name, 'BIDSVersion': '1.8.0',
+                                    'DatasetType': 'derivative', 'GeneratedBy': get_generated_by(container_info)
+                                    }
+            # Write json to output dataset
+            with open(os.path.join(output_dataset_dir, 'dataset_description.json'), 'w') as file_out:
+                json.dump(output_ds_description, file_out, indent=2, sort_keys=True)
+        else:
+            # Get output dataset metadata
+            try:
+                with open(f"{output_dataset_dir}/dataset_description.json", 'r') as file_in:
+                    output_dataset_json = json.load(file_in)
+                # If this container doesn't already exist in the generated_by list, it will be added
+                if 'GeneratedBy' in output_dataset_json:
+                    generated_by = get_generated_by(container_info, output_dataset_json['GeneratedBy'])
+                else:
+                    generated_by = get_generated_by(container_info)
+                # If we updated the generated_by, write it back to the output dataset
+                output_dataset_name = output_dataset_json['Name']
+                old_gen_by = output_dataset_json['GeneratedBy']
+                if old_gen_by is None or len(generated_by) > len(old_gen_by):
+                    output_dataset_json['GeneratedBy'] = generated_by
+                    with open(f"{output_dataset_dir}/dataset_description.json", 'w') as file_out:
+                        json.dump(output_dataset_json, file_out, indent=2, sort_keys=True)
+            except (FileNotFoundError, KeyError):
+                raise ValueError(f"Output dataset Name is required, please check "
+                                f"{output_dataset_dir}/data_description.json")
 
 
 def csv_to_bids_tsv(input_file, output_file):
@@ -33,108 +161,7 @@ def csv_to_bids_tsv(input_file, output_file):
             file_out.write('\n')
 
 
-def update_output_dataset(input_dataset_dir, output_dataset_dir, container):
 
-    # Get BIDS dataset name
-    with open(f"{input_dataset_dir}/dataset_description.json", 'r') as file_in:
-        input_dataset_json = json.load(file_in)
-
-    try:
-        input_dataset_name = input_dataset_json['Name']
-    except KeyError:
-        raise ValueError(f"Input dataset Name is required, please check {input_dataset_dir}/data_description.json")
-
-    # Check if output bids dir exists, and if not, create it
-    if not os.path.isdir(output_dataset_dir):
-        os.makedirs(output_dataset_dir)
-
-    if not os.path.exists(os.path.join(output_dataset_dir, 'dataset_description.json')):
-        # Write dataset_description.json
-        output_dataset_name = input_dataset_name + '_SynthSegMask'
-
-        output_ds_description = {'Name': output_dataset_name, 'BIDSVersion': '1.8.0',
-                                'DatasetType': 'derivative', 'GeneratedBy': get_generated_by(container)
-                                }
-
-        # Write json to output dataset
-        with open(os.path.join(output_dataset_dir, 'dataset_description.json'), 'w') as file_out:
-            json.dump(output_ds_description, file_out, indent=2, sort_keys=True)
-    else:
-        # Get output dataset metadata
-        try:
-            with open(f"{output_dataset_dir}/dataset_description.json", 'r') as file_in:
-                output_dataset_json = json.load(file_in)
-            # If this container doesn't already exist in the generated_by list, it will be added
-            if 'GeneratedBy' in output_dataset_json:
-                generated_by = get_generated_by(container, output_dataset_json['GeneratedBy'])
-            else:
-                generated_by = get_generated_by(container)
-            # If we updated the generated_by, write it back to the output dataset
-            output_dataset_name = output_dataset_json['Name']
-            old_gen_by = output_dataset_json['GeneratedBy']
-            if old_gen_by is None or len(generated_by) > len(old_gen_by):
-                output_dataset_json['GeneratedBy'] = generated_by
-                with open(f"{output_dataset_dir}/dataset_description.json", 'w') as file_out:
-                    json.dump(output_dataset_json, file_out, indent=2, sort_keys=True)
-        except (FileNotFoundError, KeyError):
-            raise ValueError(f"Output dataset Name is required, please check "
-                             f"{output_dataset_dir}/data_description.json")
-
-
-# Get a dictionary for the GeneratedBy field for the BIDS dataset_description.json
-# This is used to record the software used to generate the dataset
-# The environment variables DOCKER_IMAGE_TAG and DOCKER_IMAGE_VERSION are used if set
-#
-# Container type is assumed to be "docker" unless the variable SINGULARITY_CONTAINER
-# is defined
-def get_generated_by(container, existing_generated_by=None):
-
-    import copy
-
-    generated_by = []
-
-    # get software info from container
-    try:
-        # Run the singularity inspect command
-        result = subprocess.run(['singularity', 'inspect', '--json', container], capture_output=True, text=True, check=False)
-
-        # Parse the JSON output into a Python dictionary
-        container_info = json.loads(result.stdout)
-
-        container_docker_tag = \
-            container_info['data']['attributes']['labels']['org.label-schema.usage.singularity.deffile.from']
-
-        container_docker_version = container_docker_tag.split(":")[-1]
-
-        container_git_remote = container_info['data']['attributes']['labels']['git.remote']
-
-    except subprocess.CalledProcessError as e:
-        print(f"Error running singularity inspect: {e}")
-        return None
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON output: {e}")
-        return None
-
-    if existing_generated_by is not None:
-        generated_by = copy.deepcopy(existing_generated_by)
-        for gb in existing_generated_by:
-            if gb['Name'] == 'SynthSegMask' and gb['Container']['Tag'] == container_docker_tag:
-                # Don't overwrite existing generated_by if it's already set to this pipeline
-                return generated_by
-
-    container_type = 'singularity'
-
-    gen_dict = {'Name': 'SynthSegMask',
-                'Version': container_docker_version,
-                'CodeURL': container_git_remote,
-                'Container': {'Type': container_type, 'Tag': container_docker_tag}
-                }
-
-    generated_by.append(gen_dict)
-    return generated_by
-
-
-# main function
 parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
                                  prog="synthseg brain segmentation", add_help = False, description='''
 
@@ -190,11 +217,15 @@ if len(anatomical_images) == 1 and anatomical_images[0].endswith('.txt'):
 
 print(f"\nProcessing {len(anatomical_images)} images")
 
+# Check if output bids dir exists, and if not, create it
+if not os.path.isdir(output_dataset_dir):
+    os.makedirs(output_dataset_dir, exist_ok = True)
+
 container = args.container
 
-# Check if output bids dir exists, and if not, create it
-# Also update the output dataset description if needed
-update_output_dataset(input_dataset_dir, output_dataset_dir, container)
+container_info = get_container_info(container)
+
+update_output_dataset(output_dataset_dir, input_dataset_dir, container_info)
 
 # Now process input data
 for input_anatomical in anatomical_images:
