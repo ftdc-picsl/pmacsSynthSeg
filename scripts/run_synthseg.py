@@ -44,6 +44,7 @@ def get_container_info(container):
     # Parse the container info to get the tag
     container_info = container_info.stdout.decode('utf-8')
 
+    container_git_remote = None
     container_tag = None
     container_version = None
 
@@ -52,12 +53,13 @@ def get_container_info(container):
             # example line: org.label-schema.usage.singularity.deffile.from: cookpa/synthseg-mask:0.4.1
             container_version = line.split(':')[-1].strip()
             container_tag = line.split(':')[-2].strip() + ':' + container_version
-            break
+        if 'git.remote:' in line:
+            container_git_remote = line.split(' ')[-1].strip()
 
     if container_tag is None:
         raise ValueError(f"Container tag not found in {container}")
 
-    return {'tag': container_tag, 'version': container_version}
+    return {'tag': container_tag, 'version': container_version, 'git_remote': container_git_remote}
 
 
 # Get a dictionary for the GeneratedBy field for the BIDS dataset_description.json
@@ -88,7 +90,7 @@ def get_generated_by(container_info, existing_generated_by=None):
 
     gen_dict = {'Name': 'SynthSeg',
                 'Version': container_info['version'],
-                'CodeURL': os.environ.get('GIT_REMOTE', 'unknown'),
+                'CodeURL': container_info['git_remote'],
                 'Container': {'Type': container_type, 'Tag': container_info['tag']}
                 }
 
