@@ -1,7 +1,7 @@
 #!/bin/bash
 
-module load miniconda/3-22.11 > /dev/null
-module load singularity/3.8.3
+module load miniconda/3-25 > /dev/null
+module load apptainer/1.4.1
 
 scriptPath=$(readlink -f "$0")
 scriptDir=$(dirname "${scriptPath}")
@@ -144,7 +144,7 @@ gpuBsubOpt=""
 gpuScrptOpt=""
 
 if [[ $useGPU -gt 0 ]]; then
-  gpuBsubOpt='"-gpu "num=1:mode=exclusive_process:mps=no:gtile=1"'
+  gpuBsubOpt='-gpu "num=1:mode=exclusive_process:mps=no:gtile=1"'
   gpuScriptOpt="--gpu"
 fi
 

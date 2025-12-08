@@ -39,7 +39,7 @@ def get_dataset_name(dataset_path):
 
 def get_container_info(container):
 
-    container_info = subprocess.run(['singularity', 'inspect', container], stdout=subprocess.PIPE)
+    container_info = subprocess.run(['apptainer', 'inspect', container], stdout=subprocess.PIPE)
 
     # Parse the container info to get the tag
     container_info = container_info.stdout.decode('utf-8')
@@ -49,8 +49,8 @@ def get_container_info(container):
     container_version = None
 
     for line in container_info.split('\n'):
+        # metadata still uses singularity keys
         if 'org.label-schema.usage.singularity.deffile.from' in line:
-            # example line: org.label-schema.usage.singularity.deffile.from: cookpa/synthseg-mask:0.4.1
             container_version = line.split(':')[-1].strip()
             container_tag = line.split(':')[-2].strip() + ':' + container_version
         if 'git.remote:' in line:
@@ -66,7 +66,7 @@ def get_container_info(container):
 # This is used to record the software used to generate the dataset
 # The environment variables DOCKER_IMAGE_TAG and DOCKER_IMAGE_VERSION are used if set
 #
-# Container type is assumed to be "docker" unless the variable SINGULARITY_CONTAINER
+# Container type is assumed to be "docker" unless the variable APPTAINER_CONTAINER
 # is defined
 def get_generated_by(container_info, existing_generated_by=None):
 
@@ -74,7 +74,7 @@ def get_generated_by(container_info, existing_generated_by=None):
 
     generated_by = []
 
-    container_type = 'singularity'
+    container_type = 'apptainer'
 
     if existing_generated_by is not None:
         generated_by = copy.deepcopy(existing_generated_by)
@@ -83,10 +83,10 @@ def get_generated_by(container_info, existing_generated_by=None):
                 # Don't overwrite existing generated_by if it's already set to this pipeline
                 return generated_by
 
-    container_type = 'singularity'
+    container_type = 'apptainer'
 
-    if 'SINGULARITY_CONTAINER' in os.environ:
-        container_type = 'singularity'
+    if 'APPTAINER_CONTAINER' in os.environ:
+        container_type = 'apptainer'
 
     gen_dict = {'Name': 'SynthSeg',
                 'Version': container_info['version'],
@@ -170,7 +170,7 @@ parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
 Batch interface for segmentation with synthseg.
 
 Requires:
-  singularity
+  apptainer
 
 ''')
 required = parser.add_argument_group('Required arguments')
@@ -202,13 +202,13 @@ job_id = os.environ['LSB_JOBID']
 working_dir_tmpdir = tempfile.TemporaryDirectory(suffix=f".synthseg.{job_id}", dir="/scratch", ignore_cleanup_errors=True)
 working_dir = working_dir_tmpdir.name
 
-singularity_env = os.environ.copy()
-singularity_env['SINGULARITYENV_OMP_NUM_THREADS'] = "1"
-singularity_env['SINGULARITYENV_ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = "1"
-singularity_env['SINGULARITYENV_PYTHONUNBUFFERED'] = "1"
+apptainer_env = os.environ.copy()
+apptainer_env['APPTAINERENV_OMP_NUM_THREADS'] = "1"
+apptainer_env['APPTAINERENV_ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = "1"
+apptainer_env['APPTAINERENV_PYTHONUNBUFFERED'] = "1"
 
-if shutil.which('singularity') is None:
-    raise RuntimeError('singularity executable not found')
+if shutil.which('apptainer') is None:
+    raise RuntimeError('apptainer executable not found')
 
 anatomical_images = args.anatomical_images
 
@@ -248,6 +248,14 @@ for input_anatomical in anatomical_images:
     # suffix eg T1w, T2w
     anatomical_suffix = match.group(2)
 
+    # Remove desc- if anatomical prefix ends with desc_[^_]+
+    if re.search('_desc-[^_]+$', anatomical_prefix):
+        anatomical_prefix = re.sub('_desc-[^_]+$', '', anatomical_prefix)
+        # we can't have both raw and derivative versions of the same image
+        if os.path.exists(os.path.join(output_dataset_dir, f"{anatomical_prefix}_{anatomical_suffix}.nii.gz")):
+            print(f"ERROR: Cannot process both raw and derivative versions of the same image: {input_anatomical}")
+            continue
+
     # find brain masks matching the anatomical prefix
     brain_mask_full_path_prefix = os.path.join(mask_dataset_dir, anatomical_prefix)
 
@@ -256,7 +264,7 @@ for input_anatomical in anatomical_images:
     # because space- is supposed to denote a transformed version of a single image, not multiple images derived
     # independently.
     #
-    brain_mask_files = glob.glob(f"{brain_mask_full_path_prefix}*_desc-brain_mask.nii.gz")
+    brain_mask_files = glob.glob(f"{brain_mask_full_path_prefix}_desc-brain_mask.nii.gz")
 
     if len(brain_mask_files) == 0:
         print(f"ERROR: Brain mask not found under: {brain_mask_full_path_prefix}")
@@ -284,7 +292,7 @@ for input_anatomical in anatomical_images:
         continue
 
     # Now call synthseg - output to working_dir, will be renamed
-    synthseg_cmd_list = ['singularity', 'run', '--cleanenv']
+    synthseg_cmd_list = ['apptainer', 'run', '--cleanenv']
 
     if args.gpu:
         synthseg_cmd_list.append('--nv')
@@ -304,7 +312,7 @@ for input_anatomical in anatomical_images:
 
     print("---SynthSeg call---\n" + " ".join(synthseg_cmd_list) + "\n---")
 
-    subprocess.run(synthseg_cmd_list, env=singularity_env)
+    subprocess.run(synthseg_cmd_list, env=apptainer_env)
 
     # Rename output in BIDS derivatives format
     shutil.copy(f"{working_dir}/{anatomical_prefix}SynthSeg.nii.gz", seg_out_full_path)
