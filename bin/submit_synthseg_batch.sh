@@ -14,7 +14,7 @@ outputBIDS=""
 
 function usage() {
   echo "Usage:
-  $0 [-h] [-a 0/1] [-g 1/0] [-p 0/1] -i input_dataset -m mask_dataset -o output_dataset image_list.txt
+  $0 [-h] [-a 0/1] [-g 1/0] [-p 0/1] -i input_dataset -m mask_dataset -o output_dataset <image> [image] ...
   "
 }
 
@@ -31,7 +31,7 @@ cat << HELP
 
     $inputBIDS
 
-  The image_list should be one per line, relative to the BIDS dataset, eg
+  Images to process should be relative to the BIDS dataset, eg
 
   sub-123456/ses-19970829x0214/anat/sub-123456_ses-19970829x0214_T1w.nii.gz
 
@@ -117,7 +117,6 @@ HELP
 
 }
 
-imageList=""
 useGPU=1
 outputPosteriors=0
 outputAnts=0
