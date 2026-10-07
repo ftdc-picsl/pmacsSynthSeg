@@ -264,7 +264,7 @@ for input_anatomical in anatomical_images:
     # because space- is supposed to denote a transformed version of a single image, not multiple images derived
     # independently.
     #
-    brain_mask_files = glob.glob(f"{brain_mask_full_path_prefix}_desc-brain_mask.nii.gz")
+    brain_mask_files = glob.glob(f"{brain_mask_full_path_prefix}_space-T1w_desc-brain_mask.nii.gz")
 
     if len(brain_mask_files) == 0:
         print(f"ERROR: Brain mask not found under: {brain_mask_full_path_prefix}")
